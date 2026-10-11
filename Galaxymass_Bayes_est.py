@@ -25,59 +25,59 @@ def worker(args):
     #Unpacking arguments that are stored as a tuple
     #Opening fails and processing them using fit group function  returining the data or error notification 
     #depending on the outcome
-    grupp_nr, galaxs_path, galagr_path, chains = args
+    group_nr, galaxs_path, galagr_path, chains = args
     try:
         with fits.open(galaxs_path) as galaxs, fits.open(galagr_path) as galagr:
-            return fitmass(grupp_nr, galaxs, galagr, chains)
+            return fitmass(group_nr, galaxs, galagr, chains)
     except Exception as e:
-        print(f"[Group {grupp_nr}] FAILED: {e}")
-        return {"grupp_nr": grupp_nr, "failed": True, "error": str(e)}
+        print(f"[Group {group_nr}] FAILED: {e}")
+        return {"group_nr": group_nr, "failed": True, "error": str(e)}
     
 
 #Main function working on the separating the data and modeling the masses 
-def fitmass(grupp_nr, galaxs, galagr, chains):
+def fitmass(group_nr, galaxs, galagr, chains):
     import pymc as pm
     id_group_all = np.array(galaxs[1].data["id_group"])
-    mask = (id_group_all == grupp_nr)
+    mask = (id_group_all == group_nr)
     # Galaxy data for hte group from galaxygroup file
-    zgrupp = galaxs[1].data["z"][mask] * 299792.458
+    zgroup = galaxs[1].data["z"][mask] * 299792.458
     ra_gals = galaxs[1].data["ra"][mask]
     dec_gals = galaxs[1].data["dec"][mask]
-    n_gals      = len(zgrupp)
+    n_gals      = len(zgroup)
     
     #Galaxy group centre data from galaxy group file
-    gr_mask = (galagr[1].data["id_group"] == grupp_nr)
-    keskdist = galagr[1].data["dist"][gr_mask][0]
-    keskra = galagr[1].data["ra"][gr_mask][0]
-    keskdec = galagr[1].data["dec"][gr_mask][0]
+    gr_mask = (galagr[1].data["id_group"] == group_nr)
+    centre_dist = galagr[1].data["dist"][gr_mask][0]
+    centre_ra = galagr[1].data["ra"][gr_mask][0]
+    centre_dec = galagr[1].data["dec"][gr_mask][0]
     #How far is every galaxy from the group centre
-    ra_per_gals=(ra_gals-keskra)*np.cos(np.radians(dec_gals))
-    dec_per_gals=(dec_gals-keskdec)
-    nurk_rskyjaoks = np.radians(np.sqrt(ra_per_gals**2+dec_per_gals**2))
-    #rskygrupp=keskdist*np.radians(np.sqrt(ra_per_gals**2+dec_per_gals**2))
+    ra_per_gals=(ra_gals-centre_ra)*np.cos(np.radians(dec_gals))
+    dec_per_gals=(dec_gals-centre_dec)
+    angle_for_rsky = np.radians(np.sqrt(ra_per_gals**2+dec_per_gals**2))
+    #rskygroup=centre_dist*np.radians(np.sqrt(ra_per_gals**2+dec_per_gals**2))
     #Model responsible for the mass estimation
     with pm.Model() as massmodel:
-        # distprior = pm.Normal('distprior', mu=np.mean(keskdist), sigma=200)
+        # distprior = pm.Normal('distprior', mu=np.mean(centre_dist), sigma=200)
         # distsigma = pm.HalfNormal('distsigma', sigma=400)
-        distance=pm.Normal("dist_likelihood", mu=keskdist, sigma=200)
+        distance=pm.Normal("dist_likelihood", mu=centre_dist, sigma=200)
 
 
 
         #Setting up prioirs for the velocity
         #Normal distribution for mean velocity because we expect it to be similar to that
         #and halfnormal because the dispersion cannot be negative
-        vprior = pm.Normal('vprior', mu=np.mean(zgrupp), sigma=500)
+        vprior = pm.Normal('vprior', mu=np.mean(zgroup), sigma=500)
         vsigma = pm.HalfNormal('vsigma', sigma=500)
         
         #Likelihood for the velocity
         #and halfnormal for the distance from the centre cannot be neg
         #weibull because connects two normal distributions in a plane
-        pm.Normal("v_likelihood", mu=vprior, sigma=vsigma, observed=zgrupp)
+        pm.Normal("v_likelihood", mu=vprior, sigma=vsigma, observed=zgroup)
 
         skysigma = pm.HalfNormal('skysigma', sigma=4)
         theta_sigma = skysigma / distance
         beta_weibull = theta_sigma * np.sqrt(2)
-        pm.Weibull("sky_likelihood",alpha=2, beta=beta_weibull, observed=nurk_rskyjaoks)
+        pm.Weibull("sky_likelihood",alpha=2, beta=beta_weibull, observed=angle_for_rsky)
         #Determinstic distribution because we calculate and connect it from previous data and it is not a random variable
         Rg=pm.Deterministic('Rg', 4.5882*skysigma)
         mass_virial1 = pm.Deterministic("mass_virial", 2.325e2*Rg * (vsigma/100)**2)
@@ -100,11 +100,11 @@ def fitmass(grupp_nr, galaxs, galagr, chains):
     #Printing out data to have overview
     sep = "─" * 52
     print(f"\n{sep}")
-    print(f"  Group {grupp_nr}  |  {n_gals} galaxies")
+    print(f"  Group {group_nr}  |  {n_gals} galaxies")
     print(sep)
     #returns a dictionary of data per group
     return {
-        "grupp_nr" : grupp_nr,
+        "group_nr" : group_nr,
         "n_gals"   : n_gals,
         "failed"   : False,
         "divergences": n_div,
@@ -125,29 +125,29 @@ def main():
     galaxs_path = "SDSSgalaxies.fits"
     galagr_path = "SDSSgroups.fits"
     #user input how may galaxies to process and compute in parallel and how many chains to run per group
-    grupiarv    = int(input("\nHow many groups to process?          : "))
+    group_count = int(input("\nHow many groups to process?          : "))
     num_workers = int(input("Groups to run in parallel (workers)? : "))
     chains      = int(input("How many MCMC chains per group?      : "))
-    arv_galax_gr=set()
+    processed_groups=set()
 
     if os.path.exists("results_summary.txt"):
         with open("results_summary.txt", "r") as f:
-            for rida in f:
+            for line in f:
                 try:
-                    rida=rida.split()
-                    arv_galax_gr.add(int(rida[0]))
+                    line=line.split()
+                    processed_groups.add(int(line[0]))
                 except (ValueError, IndexError):
                     pass
-    #all necessary argument sfor workers because pool take sonly one argument
+    #all necessary arguments for workers because pool takes only one argument
     args_list = [
-        (grupp_nr, galaxs_path, galagr_path, chains)
-        for grupp_nr in range(1, grupiarv + 1)
-        if grupp_nr not in arv_galax_gr
+        (group_nr, galaxs_path, galagr_path, chains)
+        for group_nr in range(1, group_count + 1)
+        if group_nr not in processed_groups
     ]
     #Starting time
     t0 = time.time()
-    arvutatud_galaxs = []
-    ampsu_suurus=1000
+    computed_results = []
+    batch_size=1000
 
     if not os.path.exists("results_summary.txt"):
         with open("results_summary.txt", "w") as f:
@@ -156,23 +156,23 @@ def main():
                 f"{'s50':>8}  "
                 f"{'m50':>10}  {'m_ep':>9}  {'m_em':>9} {'div':>4}\n")
     # setting up multiprocessing and saves the results in raw results
-    clankerid = multiprocessing.get_context("spawn")
-    with clankerid.Pool(processes=num_workers) as pool:
+    mp_context = multiprocessing.get_context("spawn")
+    with mp_context.Pool(processes=num_workers) as pool:
         for result in pool.imap_unordered(worker, args_list):
             if result and not result.get("failed"):
-                arvutatud_galaxs.append(result)
+                computed_results.append(result)
             else:
                 pass
-            if len(arvutatud_galaxs) >= ampsu_suurus:
+            if len(computed_results) >= batch_size:
                 with open("results_summary.txt", "a") as f:
-                    for elem in arvutatud_galaxs:
-                        f.write(f"{elem['grupp_nr']:>6}  {elem['n_gals']:>4}  {elem['v50']:>8.2f}  {elem['v_ep']:>7.2f}  {elem['v_em']:>7.2f}  {elem['s50']:>8.3f}  {elem['m50']:>10.2f}  {elem['m_ep']:>9.2f}  {elem['m_em']:>9.2f}  {elem['divergences']:>4}\n")
-                arvutatud_galaxs = []
-        if arvutatud_galaxs!= []:
+                    for elem in computed_results:
+                        f.write(f"{elem['group_nr']:>6}  {elem['n_gals']:>4}  {elem['v50']:>8.2f}  {elem['v_ep']:>7.2f}  {elem['v_em']:>7.2f}  {elem['s50']:>8.3f}  {elem['m50']:>10.2f}  {elem['m_ep']:>9.2f}  {elem['m_em']:>9.2f}  {elem['divergences']:>4}\n")
+                computed_results = []
+        if computed_results!= []:
             with open("results_summary.txt", "a") as f:
-                for elem in arvutatud_galaxs:
-                    f.write(f"{elem['grupp_nr']:>6}  {elem['n_gals']:>4}  {elem['v50']:>8.2f}  {elem['v_ep']:>7.2f}  {elem['v_em']:>7.2f}  {elem['s50']:>8.3f}  {elem['m50']:>10.2f}  {elem['m_ep']:>9.2f}  {elem['m_em']:>9.2f}  {elem['divergences']:>4}\n")
-            arvutatud_galaxs = []
+                for elem in computed_results:
+                    f.write(f"{elem['group_nr']:>6}  {elem['n_gals']:>4}  {elem['v50']:>8.2f}  {elem['v_ep']:>7.2f}  {elem['v_em']:>7.2f}  {elem['s50']:>8.3f}  {elem['m50']:>10.2f}  {elem['m_ep']:>9.2f}  {elem['m_em']:>9.2f}  {elem['divergences']:>4}\n")
+            computed_results = []
     elapsed = time.time() - t0
     print(f"\nAll groups finished in {elapsed:.1f} s")
  
